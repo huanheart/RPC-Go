@@ -318,10 +318,9 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
+	"kamaRPC/internal/protocol"
 	"math"
 	"math/rand"
 	"net"
@@ -330,38 +329,6 @@ import (
 	"sync/atomic"
 	"time"
 )
-
-/////////////////////////////////////////////////////
-// ================= PROTOCOL ======================
-/////////////////////////////////////////////////////
-
-func readMsg(conn net.Conn) (*Message, error) {
-	fixed := make([]byte, 10)
-	_, err := io.ReadFull(conn, fixed)
-	if err != nil {
-		return nil, err
-	}
-	if binary.BigEndian.Uint16(fixed[0:2]) != magic {
-		return nil, fmt.Errorf("invalid magic")
-	}
-
-	headerLen := binary.BigEndian.Uint32(fixed[2:6])
-	bodyLen := binary.BigEndian.Uint32(fixed[6:10])
-
-	hb := make([]byte, headerLen)
-	io.ReadFull(conn, hb)
-
-	bb := make([]byte, bodyLen)
-	io.ReadFull(conn, bb)
-
-	var header Header
-	json.Unmarshal(hb, &header)
-
-	return &Message{
-		Header: &header,
-		Body:   bb,
-	}, nil
-}
 
 /////////////////////////////////////////////////////
 // ================= REGISTRY ======================
@@ -569,7 +536,7 @@ func (s *Server) Start(reg *Registry, name string) {
 
 func (s *Server) handle(conn net.Conn) {
 	for {
-		msg, err := readMsg(conn)
+		msg, err := protocol.Decode(conn)
 		if err != nil {
 			return
 		}
@@ -580,7 +547,7 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-func (s *Server) process(conn net.Conn, msg *Message) {
+func (s *Server) process(conn net.Conn, msg *protocol.Message) {
 	method := reflect.ValueOf(s.srv).MethodByName(msg.Header.MethodName)
 
 	arg := reflect.New(method.Type().In(0).Elem())
@@ -591,11 +558,11 @@ func (s *Server) process(conn net.Conn, msg *Message) {
 	method.Call([]reflect.Value{arg, reply})
 
 	body, _ := json.Marshal(reply.Interface())
-	resp := &Message{
-		Header: &Header{RequestID: msg.Header.RequestID},
+	resp := &protocol.Message{
+		Header: &protocol.Header{RequestID: msg.Header.RequestID},
 		Body:   body,
 	}
-	data, _ := encode(resp)
+	data, _ := protocol.Encode(msg)
 	conn.Write(data)
 }
 
@@ -643,8 +610,8 @@ func (c *Client) Invoke(ctx context.Context, service, method string, args interf
 
 		body, _ := json.Marshal(args)
 
-		msg := &Message{
-			Header: &Header{
+		msg := &protocol.Message{
+			Header: &protocol.Header{
 				RequestID:   id,
 				ServiceName: service,
 				MethodName:  method,
@@ -652,10 +619,10 @@ func (c *Client) Invoke(ctx context.Context, service, method string, args interf
 			Body: body,
 		}
 
-		data, _ := encode(msg)
+		data, _ := protocol.Encode(msg)
 		conn.Write(data)
 
-		resp, err := readMsg(conn)
+		resp, err := protocol.Decode(conn)
 		if err != nil {
 			c.breaker.RecordFailure()
 			return err

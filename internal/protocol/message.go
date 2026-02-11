@@ -3,6 +3,8 @@ package protocol
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
 )
 
 const Magic uint16 = 0x1234
@@ -27,4 +29,41 @@ func Encode(msg *Message) ([]byte, error) {
 	copy(buf[10:], hb)
 	copy(buf[10+headerLen:], msg.Body)
 	return buf, nil
+}
+
+func Decode(r io.Reader) (*Message, error) {
+	// 1️⃣ 读固定头
+	fixedHeader := make([]byte, 10)
+	if _, err := io.ReadFull(r, fixedHeader); err != nil {
+		return nil, err
+	}
+
+	if binary.BigEndian.Uint16(fixedHeader[0:2]) != Magic {
+		return nil, fmt.Errorf("protocol: invalid magic")
+	}
+
+	headerLen := binary.BigEndian.Uint32(fixedHeader[2:6])
+	bodyLen := binary.BigEndian.Uint32(fixedHeader[6:10])
+
+	// 2️⃣ 读 header
+	headerBytes := make([]byte, headerLen)
+	if _, err := io.ReadFull(r, headerBytes); err != nil {
+		return nil, err
+	}
+
+	// 3️⃣ 读 body
+	bodyBytes := make([]byte, bodyLen)
+	if _, err := io.ReadFull(r, bodyBytes); err != nil {
+		return nil, err
+	}
+
+	var header Header
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, err
+	}
+
+	return &Message{
+		Header: &header,
+		Body:   bodyBytes,
+	}, nil
 }
