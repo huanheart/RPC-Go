@@ -1,1 +1,5 @@
-.kamaRPC
+kamaRPC
+.idea/
+.vscode/
+__debug_bin*
+.DS_Store
