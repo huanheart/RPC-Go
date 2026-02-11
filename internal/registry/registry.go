@@ -81,7 +81,7 @@ func (r *Registry) Discover(service string) ([]Instance, error) {
 			Addr: string(kv.Value),
 		})
 	}
-
+	fmt.Println("发现的服务有: ", instances)
 	return instances, nil
 }
 

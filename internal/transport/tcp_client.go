@@ -98,6 +98,7 @@ type TCPClient struct {
 	addr      string
 	mu        sync.Mutex
 	wg        sync.WaitGroup
+	once      sync.Once
 	closeChan chan struct{}
 }
 
@@ -172,8 +173,10 @@ func (c *TCPClient) ReadMessage() (*protocol.Message, error) {
 
 // Close 关闭客户端
 func (c *TCPClient) Close() error {
-	close(c.closeChan)
-	c.wg.Wait()
+	c.once.Do(func() {
+		close(c.closeChan)
+		c.wg.Wait()
+	})
 	return c.conn.Close()
 }
 
