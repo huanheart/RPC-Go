@@ -87,7 +87,7 @@ func (tc *TCPConnection) Read() (*protocol.Message, error) {
 		// 先检查缓冲区是否有完整数据
 		packet := tc.buffer.Read()
 		if packet != nil {
-			msg, err := protocol.DecodeBytes(packet)
+			msg, err := protocol.Decode(packet)
 			if err != nil {
 				return nil, err
 			}
