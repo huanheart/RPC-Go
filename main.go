@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"kamaRPC/internal/protocol"
+	"kamaRPC/internal/registry"
 	"math"
 	"math/rand"
 	"net"
@@ -15,49 +16,18 @@ import (
 )
 
 /////////////////////////////////////////////////////
-// ================= REGISTRY ======================
-/////////////////////////////////////////////////////
-
-type Instance struct {
-	Addr string
-}
-
-type Registry struct {
-	mu       sync.RWMutex
-	services map[string][]Instance
-}
-
-func NewRegistry() *Registry {
-	return &Registry{
-		services: make(map[string][]Instance),
-	}
-}
-
-func (r *Registry) Register(service string, ins Instance) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.services[service] = append(r.services[service], ins)
-}
-
-func (r *Registry) Get(service string) []Instance {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.services[service]
-}
-
-/////////////////////////////////////////////////////
 // ================= LOAD BALANCE ==================
 /////////////////////////////////////////////////////
 
 type LoadBalancer interface {
-	Select([]Instance) Instance
+	Select([]registry.Instance) registry.Instance
 }
 
 type RoundRobin struct {
 	idx uint64
 }
 
-func (r *RoundRobin) Select(list []Instance) Instance {
+func (r *RoundRobin) Select(list []registry.Instance) registry.Instance {
 	i := atomic.AddUint64(&r.idx, 1)
 	return list[i%uint64(len(list))]
 }
@@ -169,8 +139,8 @@ func NewServer(addr string, srv interface{}) *Server {
 	}
 }
 
-func (s *Server) Start(reg *Registry, name string) {
-	reg.Register(name, Instance{Addr: s.addr})
+func (s *Server) Start(reg *registry.Registry, name string) {
+	reg.Register(name, registry.Instance{Addr: s.addr})
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -228,7 +198,6 @@ func (s *Server) process(conn net.Conn, msg *protocol.Message) {
 		Body: body,
 	}
 
-	// ✅ 修复：必须编码 resp
 	data, _ := protocol.Encode(resp)
 	conn.Write(data)
 }
@@ -238,13 +207,13 @@ func (s *Server) process(conn net.Conn, msg *protocol.Message) {
 /////////////////////////////////////////////////////
 
 type Client struct {
-	reg     *Registry
+	reg     *registry.Registry
 	lb      LoadBalancer
 	breaker CircuitBreaker
 	seq     uint64
 }
 
-func NewClient(reg *Registry) *Client {
+func NewClient(reg *registry.Registry) *Client {
 	return &Client{
 		reg: reg,
 		lb:  &RoundRobin{},
@@ -330,7 +299,7 @@ func (a *Arith) Add(args *Args, reply *Reply) {
 
 func main() {
 
-	reg := NewRegistry()
+	reg := registry.NewRegistry()
 
 	go NewServer(":9001", &Arith{}).Start(reg, "Arith")
 	go NewServer(":9002", &Arith{}).Start(reg, "Arith")
