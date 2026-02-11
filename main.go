@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"kamaRPC/internal/breaker"
+	"kamaRPC/internal/limiter"
+	"kamaRPC/internal/loadbalance"
 	"kamaRPC/internal/protocol"
 	"kamaRPC/internal/registry"
-	"math"
-	"math/rand"
+	"kamaRPC/internal/retry"
 	"net"
 	"reflect"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -19,107 +20,17 @@ import (
 // ================= LOAD BALANCE ==================
 /////////////////////////////////////////////////////
 
-type LoadBalancer interface {
-	Select([]registry.Instance) registry.Instance
-}
-
-type RoundRobin struct {
-	idx uint64
-}
-
-func (r *RoundRobin) Select(list []registry.Instance) registry.Instance {
-	i := atomic.AddUint64(&r.idx, 1)
-	return list[i%uint64(len(list))]
-}
-
 /////////////////////////////////////////////////////
 // ================= RETRY =========================
 /////////////////////////////////////////////////////
-
-func retry(attempts int, fn func() error) error {
-	var err error
-	for i := 0; i < attempts; i++ {
-		err = fn()
-		if err == nil {
-			return nil
-		}
-		backoff := time.Duration(math.Pow(2, float64(i))) * 100 * time.Millisecond
-		jitter := time.Duration(rand.Intn(100)) * time.Millisecond
-		time.Sleep(backoff + jitter)
-	}
-	return err
-}
 
 /////////////////////////////////////////////////////
 // ================= CIRCUIT BREAKER ==============
 /////////////////////////////////////////////////////
 
-type CircuitBreaker struct {
-	failures int
-	state    int // 0 closed, 1 open
-	mu       sync.Mutex
-}
-
-func (cb *CircuitBreaker) Allow() bool {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	return cb.state == 0
-}
-
-func (cb *CircuitBreaker) RecordFailure() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-	cb.failures++
-	if cb.failures > 3 {
-		cb.state = 1
-		go func() {
-			time.Sleep(2 * time.Second)
-			cb.mu.Lock()
-			cb.state = 0
-			cb.failures = 0
-			cb.mu.Unlock()
-		}()
-	}
-}
-
-func (cb *CircuitBreaker) RecordSuccess() {
-	cb.mu.Lock()
-	cb.failures = 0
-	cb.mu.Unlock()
-}
-
 /////////////////////////////////////////////////////
 // ================= LIMITER =======================
 /////////////////////////////////////////////////////
-
-type TokenBucket struct {
-	tokens int
-	rate   int
-	mu     sync.Mutex
-}
-
-func NewTokenBucket(rate int) *TokenBucket {
-	tb := &TokenBucket{tokens: rate, rate: rate}
-	go func() {
-		for {
-			time.Sleep(time.Second)
-			tb.mu.Lock()
-			tb.tokens = tb.rate
-			tb.mu.Unlock()
-		}
-	}()
-	return tb
-}
-
-func (tb *TokenBucket) Allow() bool {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-	if tb.tokens > 0 {
-		tb.tokens--
-		return true
-	}
-	return false
-}
 
 /////////////////////////////////////////////////////
 // ================= SERVER ========================
@@ -128,14 +39,14 @@ func (tb *TokenBucket) Allow() bool {
 type Server struct {
 	addr    string
 	srv     interface{}
-	limiter *TokenBucket
+	limiter *limiter.TokenBucket
 }
 
 func NewServer(addr string, srv interface{}) *Server {
 	return &Server{
 		addr:    addr,
 		srv:     srv,
-		limiter: NewTokenBucket(5),
+		limiter: limiter.NewTokenBucket(5),
 	}
 }
 
@@ -208,21 +119,21 @@ func (s *Server) process(conn net.Conn, msg *protocol.Message) {
 
 type Client struct {
 	reg     *registry.Registry
-	lb      LoadBalancer
-	breaker CircuitBreaker
+	lb      loadbalance.LoadBalancer
+	breaker breaker.CircuitBreaker
 	seq     uint64
 }
 
 func NewClient(reg *registry.Registry) *Client {
 	return &Client{
 		reg: reg,
-		lb:  &RoundRobin{},
+		lb:  &loadbalance.RoundRobin{},
 	}
 }
 
 func (c *Client) Invoke(ctx context.Context, service, method string, args interface{}, reply interface{}) error {
 
-	return retry(3, func() error {
+	return retry.Retry(3, func() error {
 
 		if !c.breaker.Allow() {
 			return fmt.Errorf("circuit open")
