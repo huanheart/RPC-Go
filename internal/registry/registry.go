@@ -8,10 +8,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-/////////////////////////////////////////////////////
-// ================= REGISTRY ======================
-/////////////////////////////////////////////////////
-
 type Instance struct {
 	Addr string
 }
@@ -20,10 +16,6 @@ type Registry struct {
 	client *clientv3.Client
 	prefix string
 }
-
-/////////////////////////////////////////////////////
-// =============== 初始化 ==========================
-/////////////////////////////////////////////////////
 
 func NewRegistry(endpoints []string) (*Registry, error) {
 	cli, err := clientv3.New(clientv3.Config{
@@ -40,14 +32,10 @@ func NewRegistry(endpoints []string) (*Registry, error) {
 	}, nil
 }
 
-/////////////////////////////////////////////////////
-// ================= 注册服务 ======================
-/////////////////////////////////////////////////////
-
 func (r *Registry) Register(service string, ins Instance, ttl int64) error {
 	ctx := context.Background()
 
-	// 1️⃣ 创建租约
+	// 创建租约
 	leaseResp, err := r.client.Grant(ctx, ttl)
 	if err != nil {
 		return err
@@ -55,13 +43,13 @@ func (r *Registry) Register(service string, ins Instance, ttl int64) error {
 
 	key := fmt.Sprintf("%s%s/%s", r.prefix, service, ins.Addr)
 
-	// 2️⃣ 写入 etcd，并绑定租约
+	// 写入 etcd，并绑定租约
 	_, err = r.client.Put(ctx, key, ins.Addr, clientv3.WithLease(leaseResp.ID))
 	if err != nil {
 		return err
 	}
 
-	// 3️⃣ 开启自动续约（心跳）
+	//  开启自动续约（心跳）
 	ch, err := r.client.KeepAlive(ctx, leaseResp.ID)
 	if err != nil {
 		return err
@@ -76,10 +64,6 @@ func (r *Registry) Register(service string, ins Instance, ttl int64) error {
 
 	return nil
 }
-
-/////////////////////////////////////////////////////
-// ================= 服务发现 ======================
-/////////////////////////////////////////////////////
 
 func (r *Registry) Discover(service string) ([]Instance, error) {
 	ctx := context.Background()
@@ -100,10 +84,6 @@ func (r *Registry) Discover(service string) ([]Instance, error) {
 
 	return instances, nil
 }
-
-/////////////////////////////////////////////////////
-// ================= 关闭连接 ======================
-/////////////////////////////////////////////////////
 
 func (r *Registry) Close() error {
 	return r.client.Close()
