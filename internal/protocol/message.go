@@ -67,3 +67,45 @@ func Decode(r io.Reader) (*Message, error) {
 		Body:   bodyBytes,
 	}, nil
 }
+
+// DecodeHeaderLen 从字节切片解析 headerLen
+func DecodeHeaderLen(data []byte) uint32 {
+	return binary.BigEndian.Uint32(data)
+}
+
+// DecodeBodyLen 从字节切片解析 bodyLen
+func DecodeBodyLen(data []byte) uint32 {
+	return binary.BigEndian.Uint32(data)
+}
+
+// DecodeBytes 从字节数组解码完整的 Message（用于粘包处理）
+func DecodeBytes(data []byte) (*Message, error) {
+	if len(data) < 10 {
+		return nil, fmt.Errorf("data too short for header")
+	}
+
+	if binary.BigEndian.Uint16(data[0:2]) != Magic {
+		return nil, fmt.Errorf("protocol: invalid magic")
+	}
+
+	headerLen := binary.BigEndian.Uint32(data[2:6])
+	bodyLen := binary.BigEndian.Uint32(data[6:10])
+
+	totalLen := 10 + int(headerLen) + int(bodyLen)
+	if len(data) < totalLen {
+		return nil, fmt.Errorf("data incomplete, expected %d, got %d", totalLen, len(data))
+	}
+
+	headerBytes := data[10 : 10+headerLen]
+	bodyBytes := data[10+headerLen:]
+
+	var header Header
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, err
+	}
+
+	return &Message{
+		Header: &header,
+		Body:   bodyBytes,
+	}, nil
+}
