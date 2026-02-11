@@ -9,7 +9,12 @@ import (
 
 func (s *Server) Process(conn net.Conn, msg *protocol.Message) {
 
-	method := reflect.ValueOf(s.srv).MethodByName(msg.Header.MethodName)
+	svc, ok := s.services[msg.Header.ServiceName]
+	if !ok {
+		return
+	}
+
+	method := reflect.ValueOf(svc).MethodByName(msg.Header.MethodName)
 	if !method.IsValid() {
 		return
 	}

@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Args struct {
 	A int
@@ -16,4 +19,5 @@ type Arith struct{}
 func (a *Arith) Add(args *Args, reply *Reply) {
 	time.Sleep(200 * time.Millisecond)
 	reply.Result = args.A + args.B
+	fmt.Println("Add result is ", reply.Result)
 }

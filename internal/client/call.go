@@ -3,62 +3,47 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"kamaRPC/internal/protocol"
-	"kamaRPC/internal/retry"
 	"net"
-	"sync/atomic"
 )
 
 func (c *Client) Invoke(ctx context.Context, service, method string, args interface{}, reply interface{}) error {
+	instances, err := c.reg.Discover(service)
+	if err != nil {
+		return err
+	}
 
-	return retry.Retry(3, func() error {
+	if len(instances) == 0 {
+		return errors.New("no instance")
+	}
 
-		if !c.breaker.Allow() {
-			return fmt.Errorf("circuit open")
-		}
+	addr := instances[0].Addr
 
-		instances := c.reg.Get(service)
-		if len(instances) == 0 {
-			return fmt.Errorf("no instance")
-		}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
 
-		target := c.lb.Select(instances)
+	// 使用正确的协议格式发送请求
+	body, _ := json.Marshal(args)
+	req := &protocol.Message{
+		Header: &protocol.Header{
+			ServiceName: service,
+			MethodName:  method,
+		},
+		Body: body,
+	}
 
-		conn, err := net.Dial("tcp", target.Addr)
-		if err != nil {
-			c.breaker.RecordFailure()
-			return err
-		}
-		defer conn.Close()
+	data, _ := protocol.Encode(req)
+	conn.Write(data)
 
-		id := atomic.AddUint64(&c.seq, 1)
+	// 使用协议读取响应
+	resp, err := protocol.Decode(conn)
+	if err != nil {
+		return err
+	}
 
-		body, _ := json.Marshal(args)
-
-		msg := &protocol.Message{
-			Header: &protocol.Header{
-				RequestID:   id,
-				ServiceName: service,
-				MethodName:  method,
-			},
-			Body: body,
-		}
-
-		data, _ := protocol.Encode(msg)
-		conn.Write(data)
-
-		resp, err := protocol.Decode(conn)
-		if err != nil {
-			c.breaker.RecordFailure()
-			return err
-		}
-
-		if err := json.Unmarshal(resp.Body, reply); err != nil {
-			return err
-		}
-
-		c.breaker.RecordSuccess()
-		return nil
-	})
+	return json.Unmarshal(resp.Body, reply)
 }
