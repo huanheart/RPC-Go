@@ -1,6 +1,7 @@
 package main
 
 import (
+	"kamaRPC/internal/codec"
 	"kamaRPC/internal/registry"
 	"kamaRPC/internal/server"
 	"kamaRPC/pkg/api"
@@ -13,8 +14,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := server.NewServer(":9090")
-
+	srv, err := server.NewServer(":9090", server.WithServerCodec(codec.JSON))
+	if err != nil {
+		log.Println("server.NewServer error ", err.Error())
+		return
+	}
 	// 注册 Arith 服务
 	srv.Register("Arith", &api.Arith{})
 

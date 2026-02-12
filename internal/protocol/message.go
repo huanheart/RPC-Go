@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"kamaRPC/internal/codec"
+	"log"
 )
 
 const Magic uint16 = 0x1234
@@ -14,7 +16,14 @@ type Message struct {
 }
 
 func Encode(msg *Message) ([]byte, error) {
-	hb, _ := json.Marshal(msg.Header)
+
+	codec, err := codec.New(codec.JSON)
+	if err != nil {
+		log.Println("构建codec器失败,错误原因为: ", err)
+		return nil, err
+	}
+
+	hb, _ := codec.Marshal(msg.Header)
 	headerLen := uint32(len(hb))
 	bodyLen := uint32(len(msg.Body))
 

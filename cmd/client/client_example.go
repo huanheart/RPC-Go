@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"kamaRPC/internal/client"
+	"kamaRPC/internal/codec"
 	"kamaRPC/internal/registry"
 	"kamaRPC/pkg/api"
 	"log"
@@ -15,7 +16,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	client := client.NewClient(reg)
+	client, err := client.NewClient(reg, client.WithClientCodec(codec.JSON))
+	if err != nil {
+		log.Println("client.NewClient:", err)
+		return
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)

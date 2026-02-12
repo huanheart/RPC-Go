@@ -1,6 +1,7 @@
 package server
 
 import (
+	"kamaRPC/internal/codec"
 	"kamaRPC/internal/limiter"
 	"kamaRPC/internal/protocol"
 	"kamaRPC/internal/transport"
@@ -13,16 +14,32 @@ type Server struct {
 	limiter  *limiter.TokenBucket
 	listener net.Listener
 	handler  *Handler
+	codec    codec.Codec
 }
 
-func NewServer(addr string) *Server {
+// 这边用了另外一种go规范去创建对象
+func mustNewHandler(s interface{}) *Handler {
+	h, err := NewHandler(nil, WithHandlerCodec(codec.JSON))
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+func NewServer(addr string, opts ...ServerOption) (*Server, error) {
 	s := &Server{
 		addr:     addr,
 		services: make(map[string]interface{}),
 		limiter:  limiter.NewTokenBucket(100),
-		handler:  NewHandler(nil),
+		handler:  mustNewHandler(nil),
 	}
-	return s
+
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 func (s *Server) Register(name string, service interface{}) {

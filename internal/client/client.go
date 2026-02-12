@@ -2,9 +2,9 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"kamaRPC/internal/codec"
 	"kamaRPC/internal/limiter"
 	"kamaRPC/internal/loadbalance"
 	"kamaRPC/internal/protocol"
@@ -14,47 +14,71 @@ import (
 	"time"
 )
 
+// ==============================
 // Client RPC 客户端
+// ==============================
+
 type Client struct {
 	reg     *registry.Registry
 	lb      loadbalance.LoadBalancer
 	limiter *limiter.TokenBucket
 	timeout time.Duration
-	conns   sync.Map
+	codec   codec.Codec
+
+	// 每个地址一个连接池
+	pools sync.Map // map[string]*transport.ConnectionPool
 }
 
-// NewClient 创建新的客户端
-func NewClient(reg *registry.Registry) *Client {
-	return &Client{
+func NewClient(reg *registry.Registry, opts ...ClientOption) (*Client, error) {
+	c := &Client{
 		reg:     reg,
 		lb:      &loadbalance.RoundRobin{},
 		limiter: limiter.NewTokenBucket(100),
 		timeout: 5 * time.Second,
 	}
+
+	for _, opt := range opts {
+		if err := opt(c); err != nil {
+			return nil, err
+		}
+	}
+
+	return c, nil
 }
 
-// Invoke 同步调用
-func (c *Client) Invoke(ctx context.Context, service, method string, args interface{}, reply interface{}) error {
-	// 检查限流
+func (c *Client) Invoke(ctx context.Context, service string, method string, args interface{}, reply interface{}) error {
+
+	// 限流
 	if !c.limiter.Allow() {
 		return errors.New("rate limit exceeded")
 	}
 
-	// 从负载均衡器获取地址
+	// 发现服务
 	addr, err := c.getAddr(service)
 	if err != nil {
 		return err
 	}
 
-	// 获取或创建连接
-	conn := c.getConn(addr)
-	if conn == nil {
-		return errors.New("failed to connect")
-	}
-	defer conn.Close()
+	// 获取连接池
+	pool := c.getPool(addr)
 
-	// 构建请求
-	body, _ := json.Marshal(args)
+	// 设置超时
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	// 从连接池获取连接
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer pool.Release(conn)
+
+	// 编码请求
+	body, err := c.codec.Marshal(args)
+	if err != nil {
+		return err
+	}
+
 	req := &protocol.Message{
 		Header: &protocol.Header{
 			RequestID:   1,
@@ -75,36 +99,31 @@ func (c *Client) Invoke(ctx context.Context, service, method string, args interf
 		return err
 	}
 
-	// 检查错误
 	if resp.Header.Error != "" {
 		return errors.New(resp.Header.Error)
 	}
 
-	// 反序列化响应
-	return json.Unmarshal(resp.Body, reply)
+	// 解码响应
+	return c.codec.Unmarshal(resp.Body, reply)
 }
 
-// getConn 获取或创建连接
-func (c *Client) getConn(addr string) *transport.TCPClient {
-	// 先检查缓存
-	if conn, ok := c.conns.Load(addr); ok {
-		tcpConn := conn.(*transport.TCPClient)
-		if !tcpConn.IsClosed() {
-			return tcpConn
-		}
+func (c *Client) getPool(addr string) *transport.ConnectionPool {
+	// 已存在
+	if pool, ok := c.pools.Load(addr); ok {
+		return pool.(*transport.ConnectionPool)
 	}
 
-	// 创建新连接
-	conn, err := transport.NewTCPClient(addr)
-	if err != nil {
-		return nil
-	}
+	// 创建新的连接池
+	newPool := transport.NewConnectionPool(
+		addr,
+		10,  // maxIdle
+		100, // maxActive
+	)
 
-	c.conns.Store(addr, conn)
-	return conn
+	actual, _ := c.pools.LoadOrStore(addr, newPool)
+	return actual.(*transport.ConnectionPool)
 }
 
-// getAddr 从注册中心和负载均衡器获取地址
 func (c *Client) getAddr(service string) (string, error) {
 	if c.reg == nil {
 		return "", errors.New("registry not configured")
@@ -119,16 +138,23 @@ func (c *Client) getAddr(service string) (string, error) {
 		return "", errors.New("no instance available")
 	}
 
-	// 使用负载均衡器选择实例
 	instance := c.lb.Select(instances)
 	return instance.Addr, nil
 }
 
-// InvokeWithRetry 带重试的调用
-func (c *Client) InvokeWithRetry(ctx context.Context, service, method string, args interface{}, reply interface{}, retries int) error {
+func (c *Client) InvokeWithRetry(
+	ctx context.Context,
+	service string,
+	method string,
+	args interface{},
+	reply interface{},
+	retries int,
+) error {
+
 	var lastErr error
 
 	for i := 0; i <= retries; i++ {
+
 		err := c.Invoke(ctx, service, method, args, reply)
 		if err == nil {
 			return nil
@@ -136,7 +162,6 @@ func (c *Client) InvokeWithRetry(ctx context.Context, service, method string, ar
 
 		lastErr = err
 
-		// 判断是否可重试
 		if !isRetryable(err) {
 			return err
 		}
@@ -144,6 +169,7 @@ func (c *Client) InvokeWithRetry(ctx context.Context, service, method string, ar
 		// 指数退避
 		if i < retries {
 			backoff := time.Duration(1<<uint(i)) * 100 * time.Millisecond
+
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -155,20 +181,31 @@ func (c *Client) InvokeWithRetry(ctx context.Context, service, method string, ar
 	return fmt.Errorf("after %d retries: %w", retries, lastErr)
 }
 
-// isRetryable 判断错误是否可重试
 func isRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
 
 	errStr := err.Error()
-	if errStr == "timeout" || errStr == "connection refused" || errStr == "broken pipe" {
-		return true
-	}
 
-	if errStr == "service not found" || errStr == "rate limit exceeded" {
+	switch errStr {
+	case "timeout",
+		"connection refused",
+		"broken pipe":
+		return true
+
+	case "service not found",
+		"rate limit exceeded":
 		return false
 	}
 
 	return true
+}
+
+func (c *Client) Close() {
+	c.pools.Range(func(key, value interface{}) bool {
+		pool := value.(*transport.ConnectionPool)
+		pool.Close()
+		return true
+	})
 }

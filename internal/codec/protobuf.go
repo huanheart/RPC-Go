@@ -8,9 +8,9 @@ import (
 
 const PROTO Type = 2
 
-type ProtoCodec struct{}
+type protoCodec struct{}
 
-func (p *ProtoCodec) Marshal(v interface{}) ([]byte, error) {
+func (p *protoCodec) Marshal(v interface{}) ([]byte, error) {
 	msg, ok := v.(proto.Message)
 	if !ok {
 		return nil, fmt.Errorf("proto codec: not proto.Message")
@@ -18,7 +18,7 @@ func (p *ProtoCodec) Marshal(v interface{}) ([]byte, error) {
 	return proto.Marshal(msg)
 }
 
-func (p *ProtoCodec) Unmarshal(data []byte, v interface{}) error {
+func (p *protoCodec) Unmarshal(data []byte, v interface{}) error {
 	msg, ok := v.(proto.Message)
 	if !ok {
 		return fmt.Errorf("proto codec: not proto.Message")
@@ -28,6 +28,6 @@ func (p *ProtoCodec) Unmarshal(data []byte, v interface{}) error {
 
 func init() {
 	Register(PROTO, func() Codec {
-		return &ProtoCodec{}
+		return &protoCodec{}
 	})
 }

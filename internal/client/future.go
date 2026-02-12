@@ -4,23 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"kamaRPC/internal/codec"
 	"sync"
 	"time"
 )
 
 // Future 异步调用结果
 type Future struct {
-	done chan struct{}
-	res  []byte
-	err  error
-	mu   sync.Mutex
+	done  chan struct{}
+	res   []byte
+	err   error
+	mu    sync.Mutex
+	codec codec.Codec
 }
 
 // NewFuture 创建新的 Future
-func NewFuture() *Future {
-	return &Future{
+func NewFuture(opts ...FutureOption) (*Future, error) {
+
+	f := &Future{
 		done: make(chan struct{}),
 	}
+
+	for _, opt := range opts {
+		if err := opt(f); err != nil {
+			return nil, err
+		}
+	}
+
+	return f, nil
 }
 
 // Done 设置结果
@@ -64,7 +75,7 @@ func (f *Future) GetResult(reply interface{}) error {
 		return f.err
 	}
 
-	return json.Unmarshal(f.res, reply)
+	return f.codec.Unmarshal(f.res, reply)
 }
 
 // GetResultWithTimeout 带超时获取结果

@@ -3,18 +3,29 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"kamaRPC/internal/codec"
 	"kamaRPC/internal/protocol"
 	"kamaRPC/internal/transport"
+	"log"
 	"reflect"
 )
 
 // Handler 处理请求
 type Handler struct {
 	server interface{}
+	codec  codec.Codec
 }
 
-func NewHandler(s interface{}) *Handler {
-	return &Handler{server: s}
+func NewHandler(s interface{}, opts ...HandleOption) (*Handler, error) {
+	h := &Handler{server: s}
+
+	for _, opt := range opts {
+		if err := opt(h); err != nil {
+			return nil, err
+		}
+	}
+
+	return h, nil
 }
 
 // Process 处理 TCP 请求
@@ -43,7 +54,10 @@ func (h *Handler) Process(conn *transport.TCPConnection, msg *protocol.Message) 
 		return
 	}
 
-	body, _ := json.Marshal(result)
+	body, err := h.codec.Marshal(result)
+	if err != nil {
+		log.Println("Handler Process failed err ", err.Error())
+	}
 	resp := &protocol.Message{
 		Header: &protocol.Header{
 			RequestID: msg.Header.RequestID,

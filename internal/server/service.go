@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"kamaRPC/internal/codec"
 	"kamaRPC/internal/protocol"
+	"log"
 	"net"
 	"reflect"
 )
@@ -28,7 +30,13 @@ func (s *Server) Process(conn net.Conn, msg *protocol.Message) {
 
 	method.Call([]reflect.Value{arg, reply})
 
-	body, _ := json.Marshal(reply.Interface())
+	codec, err := codec.New(codec.JSON)
+	if err != nil {
+		log.Println("构建codec器失败,错误原因为: ", err)
+		return
+	}
+
+	body, _ := codec.Marshal(reply.Interface())
 
 	resp := &protocol.Message{
 		Header: &protocol.Header{
