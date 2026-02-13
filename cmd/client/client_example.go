@@ -35,8 +35,20 @@ func main() {
 				fmt.Println("error:", err)
 				return
 			}
+			if args.A+args.B != reply.Result {
+				log.Println("add 出现非法错误", args.A, " ", reply.Result)
+			}
+			fmt.Printf("mul %v+%v result: %v\n", args.A, args.B, reply.Result)
 
-			fmt.Println("result:", reply.Result)
+			err = client.Invoke(context.Background(), "Arith2", "Mul", args, reply)
+			if err != nil {
+				fmt.Println("error:", err)
+				return
+			}
+			if args.A*args.B != reply.Result {
+				log.Println("mul 出现非法错误", args.A, " ", reply.Result)
+			}
+			fmt.Printf("mul %v*%v result: %v\n", args.A, args.B, reply.Result)
 		}(i)
 	}
 

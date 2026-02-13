@@ -33,7 +33,7 @@ func NewClient(reg *registry.Registry, opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		reg:     reg,
 		lb:      &loadbalance.RoundRobin{},
-		limiter: limiter.NewTokenBucket(100),
+		limiter: limiter.NewTokenBucket(10000),
 		timeout: 5 * time.Second,
 	}
 
@@ -80,6 +80,7 @@ func (c *Client) Invoke(ctx context.Context, service string, method string, args
 	}
 
 	resp, err := conn.SendRequest(req)
+	// log.Println("resp is %v", resp.Header.RequestID)
 	if err != nil {
 		return err
 	}
@@ -100,7 +101,7 @@ func (c *Client) getPool(addr string) *transport.ConnectionPool {
 	// 创建新的连接池
 	newPool := transport.NewConnectionPool(
 		addr,
-		1, // maxIdle
+		0, // maxIdle
 		1, // maxActive
 	)
 

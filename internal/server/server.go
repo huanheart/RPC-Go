@@ -5,6 +5,7 @@ import (
 	"kamaRPC/internal/limiter"
 	"kamaRPC/internal/protocol"
 	"kamaRPC/internal/transport"
+	"log"
 	"net"
 )
 
@@ -18,7 +19,7 @@ type Server struct {
 }
 
 // 这边用了另外一种go规范去创建对象
-func mustNewHandler(s interface{}) *Handler {
+func mustNewHandler() *Handler {
 	h, err := NewHandler(nil, WithHandlerCodec(codec.JSON))
 	if err != nil {
 		panic(err)
@@ -30,8 +31,8 @@ func NewServer(addr string, opts ...ServerOption) (*Server, error) {
 	s := &Server{
 		addr:     addr,
 		services: make(map[string]interface{}),
-		limiter:  limiter.NewTokenBucket(100),
-		handler:  mustNewHandler(nil),
+		limiter:  limiter.NewTokenBucket(10000),
+		handler:  mustNewHandler(),
 	}
 
 	for _, opt := range opts {
@@ -46,10 +47,12 @@ func (s *Server) Register(name string, service interface{}) {
 	s.services[name] = service
 }
 
-// 单连接单协程串行模型
+// 单连接单协程串行模型,请求层面可以像http1.1一样复用一个连接
+// 但是现在是响应层面, 他只会顺序执行第一个请求,执行完之后才执行完第二个请求
+// todo:后续需要以流的形式去优化
 func (s *Server) Handle(conn *transport.TCPConnection) {
 	defer conn.Close()
-
+	log.Println("测试一次")
 	for {
 		// 读取请求
 		msg, err := conn.Read()
@@ -69,12 +72,8 @@ func (s *Server) Handle(conn *transport.TCPConnection) {
 			conn.Write(resp)
 			continue
 		}
-
-		// 更新 handler 中的服务
-		s.handler.server = s.services[msg.Header.ServiceName]
-
 		// 处理请求
-		s.handler.Process(conn, msg)
+		s.handler.Process(conn, msg, s.services[msg.Header.ServiceName])
 	}
 }
 

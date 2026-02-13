@@ -20,10 +20,16 @@ func main() {
 		return
 	}
 	// 注册 Arith 服务
-	srv.Register("Arith", &api.Arith{})
-
+	srv.Register("Arith", &api.Arith{K: 1})
+	srv.Register("Arith2", &api.Arith2{K: 2})
 	// 注册服务到 etcd
 	err = reg.Register("Arith", registry.Instance{
+		Addr: "localhost:9090",
+	}, 10)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = reg.Register("Arith2", registry.Instance{
 		Addr: "localhost:9090",
 	}, 10)
 	if err != nil {

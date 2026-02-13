@@ -3,7 +3,6 @@ package transport
 import (
 	"errors"
 	"kamaRPC/internal/protocol"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -58,7 +57,7 @@ func (c *TCPClient) SendRequest(msg *protocol.Message) (*protocol.Message, error
 
 	seq := c.nextSeq()
 	msg.Header.RequestID = seq
-	log.Println("当前序列号为: ", seq)
+	// log.Println("当前序列号为: ", seq)
 
 	call := &Call{
 		done: make(chan struct{}),
@@ -78,7 +77,6 @@ func (c *TCPClient) SendRequest(msg *protocol.Message) (*protocol.Message, error
 
 	// 等待响应
 	<-call.done
-
 	return call.resp, call.err
 }
 

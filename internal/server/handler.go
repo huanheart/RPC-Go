@@ -12,14 +12,11 @@ import (
 
 // Handler 处理请求
 type Handler struct {
-	server interface{}
-	codec  codec.Codec
+	codec codec.Codec
 }
 
 func NewHandler(s interface{}, opts ...HandleOption) (*Handler, error) {
-	h := &Handler{
-		server: s,
-	}
+	h := &Handler{}
 
 	for _, opt := range opts {
 		if err := opt(h); err != nil {
@@ -34,15 +31,12 @@ func NewHandler(s interface{}, opts ...HandleOption) (*Handler, error) {
 	return h, nil
 }
 
-func (h *Handler) Process(conn *transport.TCPConnection, msg *protocol.Message) {
-	if h.server == nil {
-		h.writeError(conn, msg.Header.RequestID, "service not found")
-		return
-	}
+func (h *Handler) Process(conn *transport.TCPConnection, msg *protocol.Message, server interface{}) {
 
+	// log.Println("调试: ", h.server, " ", msg.Header.ServiceName, " ", msg.Header.MethodName)
 	result, err := h.invoke(
 		context.Background(),
-		h.server,
+		server,
 		msg.Header.ServiceName,
 		msg.Header.MethodName,
 		msg.Body,
@@ -84,13 +78,7 @@ func (h *Handler) writeError(conn *transport.TCPConnection, requestID uint64, er
 	conn.Write(resp)
 }
 
-func (h *Handler) invoke(
-	ctx context.Context,
-	service interface{},
-	serviceName,
-	methodName string,
-	body []byte,
-) (interface{}, error) {
+func (h *Handler) invoke(ctx context.Context, service interface{}, serviceName, methodName string, body []byte) (interface{}, error) {
 
 	serviceValue := reflect.ValueOf(service)
 	method := serviceValue.MethodByName(methodName)

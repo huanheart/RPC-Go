@@ -86,6 +86,7 @@ func (tc *TCPConnection) Read() (*protocol.Message, error) {
 		}
 
 		// 读取数据
+		//用一个缓冲区,而不是直接写到tc.buffer,主要是可以一边让tc.buffer在read,一边tc.buffer又可以write
 		tmp := make([]byte, BufferSize)
 		n, err := tc.reader.Read(tmp)
 		if err != nil {
