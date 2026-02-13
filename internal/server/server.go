@@ -46,6 +46,7 @@ func (s *Server) Register(name string, service interface{}) {
 	s.services[name] = service
 }
 
+// 单连接单协程串行模型
 func (s *Server) Handle(conn *transport.TCPConnection) {
 	defer conn.Close()
 

@@ -18,7 +18,7 @@ func main() {
 	}
 	client, err := client.NewClient(reg, client.WithClientCodec(codec.JSON))
 	if err != nil {
-		log.Println("client.NewClient:", err)
+		log.Println("client.NewClient:", err.Error())
 		return
 	}
 	var wg sync.WaitGroup
@@ -39,6 +39,7 @@ func main() {
 			fmt.Println("result:", reply.Result)
 		}(i)
 	}
+
 	wg.Wait()
 
 }
