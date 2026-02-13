@@ -3,6 +3,7 @@ package transport
 import (
 	"errors"
 	"kamaRPC/internal/protocol"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -57,6 +58,7 @@ func (c *TCPClient) SendRequest(msg *protocol.Message) (*protocol.Message, error
 
 	seq := c.nextSeq()
 	msg.Header.RequestID = seq
+	log.Println("当前序列号为: ", seq)
 
 	call := &Call{
 		done: make(chan struct{}),
@@ -64,7 +66,7 @@ func (c *TCPClient) SendRequest(msg *protocol.Message) (*protocol.Message, error
 
 	c.pending.Store(seq, call)
 
-	// 写是串行的
+	// 写必须是串行的(防止出现header header body body现象)
 	c.writeMu.Lock()
 	err := c.conn.Write(msg)
 	c.writeMu.Unlock()

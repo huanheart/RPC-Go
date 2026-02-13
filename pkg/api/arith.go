@@ -16,8 +16,9 @@ type Reply struct {
 
 type Arith struct{}
 
-func (a *Arith) Add(args *Args, reply *Reply) {
+func (a *Arith) Add(args *Args, reply *Reply) error {
 	time.Sleep(200 * time.Millisecond)
 	reply.Result = args.A + args.B
 	fmt.Println("Add result is ", reply.Result)
+	return nil
 }

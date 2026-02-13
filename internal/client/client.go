@@ -100,8 +100,8 @@ func (c *Client) getPool(addr string) *transport.ConnectionPool {
 	// 创建新的连接池
 	newPool := transport.NewConnectionPool(
 		addr,
-		2,  // maxIdle
-		10, // maxActive
+		1, // maxIdle
+		1, // maxActive
 	)
 
 	actual, _ := c.pools.LoadOrStore(addr, newPool)

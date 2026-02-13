@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"kamaRPC/internal/codec"
 	"kamaRPC/internal/protocol"
@@ -17,7 +17,9 @@ type Handler struct {
 }
 
 func NewHandler(s interface{}, opts ...HandleOption) (*Handler, error) {
-	h := &Handler{server: s}
+	h := &Handler{
+		server: s,
+	}
 
 	for _, opt := range opts {
 		if err := opt(h); err != nil {
@@ -25,110 +27,182 @@ func NewHandler(s interface{}, opts ...HandleOption) (*Handler, error) {
 		}
 	}
 
+	if h.codec == nil {
+		return nil, fmt.Errorf("codec must not be nil")
+	}
+
 	return h, nil
 }
 
-// Process 处理 TCP 请求
 func (h *Handler) Process(conn *transport.TCPConnection, msg *protocol.Message) {
-	service := h.server
-	if service == nil {
-		resp := &protocol.Message{
-			Header: &protocol.Header{
-				RequestID: msg.Header.RequestID,
-				Error:     "service not found",
-			},
-		}
-		conn.Write(resp)
+	if h.server == nil {
+		h.writeError(conn, msg.Header.RequestID, "service not found")
 		return
 	}
 
-	result, err := h.invoke(service, msg.Header.ServiceName, msg.Header.MethodName, msg.Body)
+	result, err := h.invoke(
+		context.Background(),
+		h.server,
+		msg.Header.ServiceName,
+		msg.Header.MethodName,
+		msg.Body,
+	)
+
 	if err != nil {
-		resp := &protocol.Message{
-			Header: &protocol.Header{
-				RequestID: msg.Header.RequestID,
-				Error:     err.Error(),
-			},
-		}
-		conn.Write(resp)
+		h.writeError(conn, msg.Header.RequestID, err.Error())
 		return
 	}
 
-	body, err := h.codec.Marshal(result)
-	if err != nil {
-		log.Println("Handler Process failed err ", err.Error())
+	var body []byte
+	if result != nil {
+		var marshalErr error
+		body, marshalErr = h.codec.Marshal(result)
+		if marshalErr != nil {
+			log.Println("marshal error:", marshalErr)
+			h.writeError(conn, msg.Header.RequestID, marshalErr.Error())
+			return
+		}
 	}
+
 	resp := &protocol.Message{
 		Header: &protocol.Header{
 			RequestID: msg.Header.RequestID,
-			Error:     "",
 		},
 		Body: body,
+	}
+
+	conn.Write(resp)
+}
+
+func (h *Handler) writeError(conn *transport.TCPConnection, requestID uint64, errMsg string) {
+	resp := &protocol.Message{
+		Header: &protocol.Header{
+			RequestID: requestID,
+			Error:     errMsg,
+		},
 	}
 	conn.Write(resp)
 }
 
-// invoke 使用反射调用服务方法
-func (h *Handler) invoke(service interface{}, serviceName, methodName string, body []byte) (interface{}, error) {
+func (h *Handler) invoke(
+	ctx context.Context,
+	service interface{},
+	serviceName,
+	methodName string,
+	body []byte,
+) (interface{}, error) {
+
 	serviceValue := reflect.ValueOf(service)
-	methodValue := serviceValue.MethodByName(methodName)
-	if !methodValue.IsValid() {
+	method := serviceValue.MethodByName(methodName)
+	if !method.IsValid() {
 		return nil, fmt.Errorf("method not found: %s.%s", serviceName, methodName)
 	}
 
-	numIn := methodValue.Type().NumIn()
+	methodType := method.Type()
+	numIn := methodType.NumIn()
+	numOut := methodType.NumOut()
+
 	args := make([]reflect.Value, 0, numIn)
 
-	if numIn == 1 {
-		// 单参数方法
-		argType := methodValue.Type().In(0)
-		arg := reflect.New(argType.Elem()) // 假设是 *T
-		if len(body) > 0 {
-			if err := json.Unmarshal(body, arg.Interface()); err != nil {
-				return nil, err
-			}
-		}
-		args = append(args, arg)
-	} else if numIn == 2 {
-		// 标准 RPC 方法 func(arg *Arg, reply *Reply) error
-		// 处理第一个参数
-		argType := methodValue.Type().In(0)
-		arg := reflect.New(argType.Elem())
-		if len(body) > 0 {
-			if err := json.Unmarshal(body, arg.Interface()); err != nil {
-				return nil, err
-			}
-		}
-		args = append(args, arg)
+	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
 
-		// 处理第二个参数 reply
-		replyType := methodValue.Type().In(1)
-		reply := reflect.New(replyType.Elem()) // 避免 **T
+	// =========================
+	// 1️⃣ net/rpc 风格
+	// func(req *Req, reply *Resp) error
+	// =========================
+	if numIn == 2 &&
+		methodType.In(0).Kind() == reflect.Ptr &&
+		methodType.In(1).Kind() == reflect.Ptr &&
+		numOut == 1 &&
+		methodType.Out(0).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+
+		// 构造 req
+		reqType := methodType.In(0)
+		req := reflect.New(reqType.Elem())
+
+		if len(body) > 0 {
+			if err := h.codec.Unmarshal(body, req.Interface()); err != nil {
+				return nil, err
+			}
+		}
+
+		// 构造 reply
+		replyType := methodType.In(1)
+		reply := reflect.New(replyType.Elem())
+
+		args = append(args, req)
 		args = append(args, reply)
-	} else if numIn > 2 {
-		// 多参数方法
-		for i := 0; i < numIn; i++ {
-			paramType := methodValue.Type().In(i)
-			param := reflect.New(paramType.Elem())
-			if i == 0 && len(body) > 0 {
-				_ = json.Unmarshal(body, param.Interface())
-			}
-			args = append(args, param)
+
+		results := method.Call(args)
+
+		// 处理 error
+		if errVal := results[0].Interface(); errVal != nil {
+			return nil, errVal.(error)
 		}
+
+		// 🔥 关键修复：必须 Elem()
+		return reply.Elem().Interface(), nil
 	}
 
-	// 调用方法
-	results := methodValue.Call(args)
+	// =========================
+	// 2️⃣ 推荐生产签名
+	// func(ctx context.Context, req *Req) (*Resp, error)
+	// func(req *Req) (*Resp, error)
+	// =========================
 
-	// 如果是标准 RPC，有 reply 参数，返回 reply
-	if numIn == 2 {
-		reply := args[1]
-		return reply.Interface(), nil
+	for i := 0; i < numIn; i++ {
+		paramType := methodType.In(i)
+
+		// context
+		if paramType.Implements(contextType) {
+			args = append(args, reflect.ValueOf(ctx))
+			continue
+		}
+
+		// 业务参数
+		if paramType.Kind() == reflect.Ptr {
+			// reqIndex = i
+			req := reflect.New(paramType.Elem())
+
+			if len(body) > 0 {
+				if err := h.codec.Unmarshal(body, req.Interface()); err != nil {
+					return nil, err
+				}
+			}
+
+			args = append(args, req)
+			continue
+		}
+
+		return nil, fmt.Errorf("unsupported param type: %s", paramType.String())
 	}
 
-	if len(results) > 0 {
+	results := method.Call(args)
+
+	// =========================
+	// 处理返回值
+	// =========================
+
+	switch numOut {
+
+	case 0:
+		return nil, nil
+
+	case 1:
+		// 可能是 error
+		if err, ok := results[0].Interface().(error); ok {
+			return nil, err
+		}
 		return results[0].Interface(), nil
-	}
 
-	return nil, nil
+	case 2:
+		// (result, error)
+		if errVal := results[1].Interface(); errVal != nil {
+			return nil, errVal.(error)
+		}
+		return results[0].Interface(), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported return signature")
+	}
 }
