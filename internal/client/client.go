@@ -91,67 +91,6 @@ func (c *Client) Invoke(ctx context.Context, service string, method string, args
 	return c.codec.Unmarshal(resp.Body, reply)
 }
 
-// func (c *Client) Invoke(ctx context.Context, service string, method string, args interface{}, reply interface{}) error {
-
-// 	// 限流
-// 	if !c.limiter.Allow() {
-// 		return errors.New("rate limit exceeded")
-// 	}
-
-// 	// 发现服务
-// 	addr, err := c.getAddr(service)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// 获取连接池
-// 	pool := c.getPool(addr)
-
-// 	// 设置超时
-// 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-// 	defer cancel()
-
-// 	// 从连接池获取连接
-// 	conn, err := pool.Acquire(ctx)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer pool.Release(conn)
-
-// 	// 编码请求
-// 	body, err := c.codec.Marshal(args)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	req := &protocol.Message{
-// 		Header: &protocol.Header{
-// 			RequestID:   1,
-// 			ServiceName: service,
-// 			MethodName:  method,
-// 		},
-// 		Body: body,
-// 	}
-
-// 	// 发送请求
-// 	if err := conn.WriteMessage(req); err != nil {
-// 		return err
-// 	}
-
-// 	// 读取响应
-// 	resp, err := conn.ReadMessage()
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	if resp.Header.Error != "" {
-// 		return errors.New(resp.Header.Error)
-// 	}
-
-// 	// 解码响应
-// 	return c.codec.Unmarshal(resp.Body, reply)
-// }
-
 func (c *Client) getPool(addr string) *transport.ConnectionPool {
 	// 已存在
 	if pool, ok := c.pools.Load(addr); ok {
@@ -161,8 +100,8 @@ func (c *Client) getPool(addr string) *transport.ConnectionPool {
 	// 创建新的连接池
 	newPool := transport.NewConnectionPool(
 		addr,
-		10,  // maxIdle
-		100, // maxActive
+		2,  // maxIdle
+		10, // maxActive
 	)
 
 	actual, _ := c.pools.LoadOrStore(addr, newPool)
