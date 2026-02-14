@@ -92,12 +92,9 @@ func (h *Handler) invoke(ctx context.Context, service interface{}, serviceName, 
 
 	args := make([]reflect.Value, 0, numIn)
 
-	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
-
-	// =========================
-	// 1️⃣ net/rpc 风格
+	// net/rpc 风格
 	// func(req *Req, reply *Resp) error
-	// =========================
+
 	if numIn == 2 &&
 		methodType.In(0).Kind() == reflect.Ptr &&
 		methodType.In(1).Kind() == reflect.Ptr &&
@@ -128,69 +125,7 @@ func (h *Handler) invoke(ctx context.Context, service interface{}, serviceName, 
 			return nil, errVal.(error)
 		}
 
-		// 🔥 关键修复：必须 Elem()
 		return reply.Elem().Interface(), nil
 	}
-
-	// =========================
-	// 2️⃣ 推荐生产签名
-	// func(ctx context.Context, req *Req) (*Resp, error)
-	// func(req *Req) (*Resp, error)
-	// =========================
-
-	for i := 0; i < numIn; i++ {
-		paramType := methodType.In(i)
-
-		// context
-		if paramType.Implements(contextType) {
-			args = append(args, reflect.ValueOf(ctx))
-			continue
-		}
-
-		// 业务参数
-		if paramType.Kind() == reflect.Ptr {
-			// reqIndex = i
-			req := reflect.New(paramType.Elem())
-
-			if len(body) > 0 {
-				if err := h.codec.Unmarshal(body, req.Interface()); err != nil {
-					return nil, err
-				}
-			}
-
-			args = append(args, req)
-			continue
-		}
-
-		return nil, fmt.Errorf("unsupported param type: %s", paramType.String())
-	}
-
-	results := method.Call(args)
-
-	// =========================
-	// 处理返回值
-	// =========================
-
-	switch numOut {
-
-	case 0:
-		return nil, nil
-
-	case 1:
-		// 可能是 error
-		if err, ok := results[0].Interface().(error); ok {
-			return nil, err
-		}
-		return results[0].Interface(), nil
-
-	case 2:
-		// (result, error)
-		if errVal := results[1].Interface(); errVal != nil {
-			return nil, errVal.(error)
-		}
-		return results[0].Interface(), nil
-
-	default:
-		return nil, fmt.Errorf("unsupported return signature")
-	}
+	return nil, nil
 }
