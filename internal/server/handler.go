@@ -60,7 +60,8 @@ func (h *Handler) Process(conn *transport.TCPConnection, msg *protocol.Message, 
 
 	resp := &protocol.Message{
 		Header: &protocol.Header{
-			RequestID: msg.Header.RequestID,
+			RequestID:   msg.Header.RequestID,
+			Compression: codec.CompressionGzip,
 		},
 		Body: body,
 	}
@@ -71,8 +72,9 @@ func (h *Handler) Process(conn *transport.TCPConnection, msg *protocol.Message, 
 func (h *Handler) writeError(conn *transport.TCPConnection, requestID uint64, errMsg string) {
 	resp := &protocol.Message{
 		Header: &protocol.Header{
-			RequestID: requestID,
-			Error:     errMsg,
+			RequestID:   requestID,
+			Error:       errMsg,
+			Compression: codec.CompressionGzip,
 		},
 	}
 	conn.Write(resp)

@@ -65,8 +65,9 @@ func (s *Server) Handle(conn *transport.TCPConnection) {
 		if !s.limiter.Allow() {
 			resp := &protocol.Message{
 				Header: &protocol.Header{
-					RequestID: msg.Header.RequestID,
-					Error:     "rate limit exceeded",
+					RequestID:   msg.Header.RequestID,
+					Error:       "rate limit exceeded",
+					Compression: codec.CompressionGzip,
 				},
 			}
 			conn.Write(resp)

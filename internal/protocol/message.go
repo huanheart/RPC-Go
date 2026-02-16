@@ -2,10 +2,8 @@ package protocol
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"kamaRPC/internal/codec"
-	"log"
 )
 
 const Magic uint16 = 0x1234
@@ -17,25 +15,51 @@ type Message struct {
 
 func Encode(msg *Message) ([]byte, error) {
 
-	codec, err := codec.New(codec.JSON)
+	if msg.Header == nil {
+		return nil, fmt.Errorf("header is nil")
+	}
+
+	bodyBytes := msg.Body
+
+	if msg.Header.Compression != codec.CompressionNone {
+		var err error
+		bodyBytes, err = codec.Compress(bodyBytes, msg.Header.Compression)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	headerCodec, err := codec.New(codec.JSON)
 	if err != nil {
-		log.Println("构建codec器失败,错误原因为: ", err)
 		return nil, err
 	}
 
-	hb, _ := codec.Marshal(msg.Header)
-	headerLen := uint32(len(hb))
-	bodyLen := uint32(len(msg.Body))
+	headerBytes, err := headerCodec.Marshal(msg.Header)
+	if err != nil {
+		return nil, err
+	}
+
+	headerLen := uint32(len(headerBytes))
+	bodyLen := uint32(len(bodyBytes))
 
 	total := 2 + 4 + 4 + headerLen + bodyLen
 	buf := make([]byte, total)
 
+	// 写 Magic
 	binary.BigEndian.PutUint16(buf[0:2], Magic)
+
+	// 写 headerLen
 	binary.BigEndian.PutUint32(buf[2:6], headerLen)
+
+	// 写 bodyLen
 	binary.BigEndian.PutUint32(buf[6:10], bodyLen)
 
-	copy(buf[10:], hb)
-	copy(buf[10+headerLen:], msg.Body)
+	// 写 header
+	copy(buf[10:], headerBytes)
+
+	// 写 body
+	copy(buf[10+headerLen:], bodyBytes)
+
 	return buf, nil
 }
 
@@ -51,12 +75,14 @@ func DecodeBodyLen(data []byte) uint32 {
 
 // DecodeBytes 从字节数组解码完整的 Message（用于粘包处理）
 func Decode(data []byte) (*Message, error) {
+
 	if len(data) < 10 {
-		return nil, fmt.Errorf("data too short for header")
+		return nil, fmt.Errorf("data too short")
 	}
 
+	// 1️⃣ 检查 Magic
 	if binary.BigEndian.Uint16(data[0:2]) != Magic {
-		return nil, fmt.Errorf("protocol: invalid magic")
+		return nil, fmt.Errorf("invalid magic number")
 	}
 
 	headerLen := binary.BigEndian.Uint32(data[2:6])
@@ -64,15 +90,31 @@ func Decode(data []byte) (*Message, error) {
 
 	totalLen := 10 + int(headerLen) + int(bodyLen)
 	if len(data) < totalLen {
-		return nil, fmt.Errorf("data incomplete, expected %d, got %d", totalLen, len(data))
+		return nil, fmt.Errorf("incomplete packet")
 	}
 
+	// 2️⃣ 读取 header
 	headerBytes := data[10 : 10+headerLen]
-	bodyBytes := data[10+headerLen:]
+
+	headerCodec, err := codec.New(codec.JSON)
+	if err != nil {
+		return nil, err
+	}
 
 	var header Header
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	if err := headerCodec.Unmarshal(headerBytes, &header); err != nil {
 		return nil, err
+	}
+
+	// 3️⃣ 读取 body（必须精确切片）
+	bodyBytes := data[10+headerLen : 10+headerLen+bodyLen]
+
+	// 4️⃣ 如果压缩，解压
+	if header.Compression != codec.CompressionNone {
+		bodyBytes, err = codec.Decompress(bodyBytes, header.Compression)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Message{

@@ -17,15 +17,15 @@ const (
 )
 
 // Compressor 压缩接口
-type Compressor interface {
-	Compress([]byte) ([]byte, error)
-	Decompress([]byte) ([]byte, error)
+type compressor interface {
+	compress([]byte) ([]byte, error)
+	decompress([]byte) ([]byte, error)
 }
 
 // GzipCompressor gzip 压缩器
 type GzipCompressor struct{}
 
-func (g *GzipCompressor) Compress(data []byte) ([]byte, error) {
+func (g *GzipCompressor) compress(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w := gzip.NewWriter(&buf)
 	_, err := w.Write(data)
@@ -38,7 +38,7 @@ func (g *GzipCompressor) Compress(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (g *GzipCompressor) Decompress(data []byte) ([]byte, error) {
+func (g *GzipCompressor) decompress(data []byte) ([]byte, error) {
 	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -51,18 +51,18 @@ func (g *GzipCompressor) Decompress(data []byte) ([]byte, error) {
 var (
 	gzipCompressor = &GzipCompressor{}
 	compressorMu   sync.RWMutex
-	compressors    = make(map[CompressionType]Compressor)
+	compressors    = make(map[CompressionType]compressor)
 )
 
 // RegisterCompressor 注册压缩器
-func RegisterCompressor(t CompressionType, c Compressor) {
+func RegisterCompressor(t CompressionType, c compressor) {
 	compressorMu.Lock()
 	defer compressorMu.Unlock()
 	compressors[t] = c
 }
 
 // GetCompressor 获取压缩器
-func GetCompressor(t CompressionType) Compressor {
+func GetCompressor(t CompressionType) compressor {
 	compressorMu.RLock()
 	defer compressorMu.RUnlock()
 	return compressors[t]
@@ -78,7 +78,7 @@ func Compress(data []byte, t CompressionType) ([]byte, error) {
 	if c == nil {
 		return nil, errors.New("compressor not found")
 	}
-	return c.Compress(data)
+	return c.compress(data)
 }
 
 // Decompress 使用指定类型解压
@@ -87,5 +87,5 @@ func Decompress(data []byte, t CompressionType) ([]byte, error) {
 	if c == nil {
 		return nil, errors.New("compressor not found")
 	}
-	return c.Decompress(data)
+	return c.decompress(data)
 }

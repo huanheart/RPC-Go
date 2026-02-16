@@ -32,16 +32,3 @@ func WithClientLoadBalancer(lb loadbalance.LoadBalancer) ClientOption {
 		return nil
 	}
 }
-
-type FutureOption func(*Future) error
-
-func WithFutureCodec(t codec.Type) FutureOption {
-	return func(c *Future) error {
-		cc, err := codec.New(t)
-		if err != nil {
-			return err
-		}
-		c.codec = cc
-		return nil
-	}
-}

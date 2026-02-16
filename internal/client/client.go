@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"errors"
-	"fmt"
 	"kamaRPC/internal/codec"
 	"kamaRPC/internal/limiter"
 	"kamaRPC/internal/loadbalance"
@@ -14,10 +13,6 @@ import (
 	"time"
 )
 
-// ==============================
-// Client RPC 客户端
-// ==============================
-
 type Client struct {
 	reg     *registry.Registry
 	lb      loadbalance.LoadBalancer
@@ -25,7 +20,6 @@ type Client struct {
 	timeout time.Duration
 	codec   codec.Codec
 
-	// 每个地址一个连接池
 	pools sync.Map // map[string]*transport.ConnectionPool
 }
 
@@ -36,24 +30,23 @@ func NewClient(reg *registry.Registry, opts ...ClientOption) (*Client, error) {
 		limiter: limiter.NewTokenBucket(10000),
 		timeout: 5 * time.Second,
 	}
-
 	for _, opt := range opts {
 		if err := opt(c); err != nil {
 			return nil, err
 		}
 	}
-
 	return c, nil
 }
-func (c *Client) Invoke(ctx context.Context, service string, method string, args interface{}, reply interface{}) error {
+
+func (c *Client) InvokeAsync(ctx context.Context, service string, method string, args interface{}) (*transport.Future, error) {
 
 	if !c.limiter.Allow() {
-		return errors.New("rate limit exceeded")
+		return nil, errors.New("rate limit exceeded")
 	}
 
 	addr, err := c.getAddr(service)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	pool := c.getPool(addr)
@@ -63,48 +56,43 @@ func (c *Client) Invoke(ctx context.Context, service string, method string, args
 
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	body, err := c.codec.Marshal(args)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req := &protocol.Message{
 		Header: &protocol.Header{
 			ServiceName: service,
 			MethodName:  method,
+			Compression: codec.CompressionGzip,
 		},
 		Body: body,
 	}
 
-	resp, err := conn.SendRequest(req)
-	// log.Println("resp is %v", resp.Header.RequestID)
+	return conn.SendAsync(req)
+}
+
+// 同步接口 = 异步 + 等待
+func (c *Client) Invoke(ctx context.Context, service string, method string, args interface{}, reply interface{}) error {
+
+	future, err := c.InvokeAsync(ctx, service, method, args)
 	if err != nil {
 		return err
 	}
 
-	if resp.Header.Error != "" {
-		return errors.New(resp.Header.Error)
-	}
-
-	return c.codec.Unmarshal(resp.Body, reply)
+	return future.GetResultWithContext(ctx, reply)
 }
 
 func (c *Client) getPool(addr string) *transport.ConnectionPool {
-	// 已存在
 	if pool, ok := c.pools.Load(addr); ok {
 		return pool.(*transport.ConnectionPool)
 	}
 
-	// 创建新的连接池
-	newPool := transport.NewConnectionPool(
-		addr,
-		0, // maxIdle
-		1, // maxActive
-	)
-
+	newPool := transport.NewConnectionPool(addr, 0, 1)
 	actual, _ := c.pools.LoadOrStore(addr, newPool)
 	return actual.(*transport.ConnectionPool)
 }
@@ -125,59 +113,6 @@ func (c *Client) getAddr(service string) (string, error) {
 
 	instance := c.lb.Select(instances)
 	return instance.Addr, nil
-}
-
-func (c *Client) InvokeWithRetry(ctx context.Context, service string, method string, args interface{}, reply interface{}, retries int) error {
-
-	var lastErr error
-
-	for i := 0; i <= retries; i++ {
-
-		err := c.Invoke(ctx, service, method, args, reply)
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-
-		if !isRetryable(err) {
-			return err
-		}
-
-		// 指数退避
-		if i < retries {
-			backoff := time.Duration(1<<uint(i)) * 100 * time.Millisecond
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-	}
-
-	return fmt.Errorf("after %d retries: %w", retries, lastErr)
-}
-
-func isRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := err.Error()
-
-	switch errStr {
-	case "timeout",
-		"connection refused",
-		"broken pipe":
-		return true
-
-	case "service not found",
-		"rate limit exceeded":
-		return false
-	}
-
-	return true
 }
 
 func (c *Client) Close() {

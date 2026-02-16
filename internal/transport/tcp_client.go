@@ -9,23 +9,14 @@ import (
 	"time"
 )
 
-type Call struct {
-	resp *protocol.Message
-	err  error
-	done chan struct{}
-}
-
 type TCPClient struct {
 	conn *TCPConnection
 	addr string
 
 	writeMu sync.Mutex
+	seq     uint64
 
-	// requestID 自增
-	seq uint64
-
-	// requestID -> call
-	pending sync.Map // map[uint64]*Call
+	pending sync.Map // map[uint64]*Future
 
 	closed int32
 }
@@ -36,36 +27,30 @@ func newTCPClient(addr string) (*TCPClient, error) {
 		return nil, err
 	}
 
-	client := &TCPClient{
+	c := &TCPClient{
 		conn: NewTCPConnection(rawConn),
 		addr: addr,
 	}
 
-	go client.readLoop()
-
-	return client, nil
+	go c.readLoop()
+	return c, nil
 }
 
 func (c *TCPClient) nextSeq() uint64 {
 	return atomic.AddUint64(&c.seq, 1)
 }
 
-func (c *TCPClient) SendRequest(msg *protocol.Message) (*protocol.Message, error) {
+func (c *TCPClient) SendAsync(msg *protocol.Message) (*Future, error) {
 	if atomic.LoadInt32(&c.closed) == 1 {
 		return nil, errors.New("connection closed")
 	}
 
 	seq := c.nextSeq()
 	msg.Header.RequestID = seq
-	// log.Println("当前序列号为: ", seq)
 
-	call := &Call{
-		done: make(chan struct{}),
-	}
+	future := NewFuture()
+	c.pending.Store(seq, future)
 
-	c.pending.Store(seq, call)
-
-	// 写必须是串行的(防止出现header header body body现象)
 	c.writeMu.Lock()
 	err := c.conn.Write(msg)
 	c.writeMu.Unlock()
@@ -75,9 +60,7 @@ func (c *TCPClient) SendRequest(msg *protocol.Message) (*protocol.Message, error
 		return nil, err
 	}
 
-	// 等待响应
-	<-call.done
-	return call.resp, call.err
+	return future, nil
 }
 
 func (c *TCPClient) readLoop() {
@@ -90,15 +73,18 @@ func (c *TCPClient) readLoop() {
 
 		seq := msg.Header.RequestID
 
-		value, ok := c.pending.Load(seq)
+		val, ok := c.pending.Load(seq)
 		if !ok {
 			continue
 		}
 
-		call := value.(*Call)
-		call.resp = msg
-		call.done <- struct{}{}
-		close(call.done)
+		future := val.(*Future)
+
+		if msg.Header.Error != "" {
+			future.Done(nil, errors.New(msg.Header.Error))
+		} else {
+			future.Done(msg.Body, nil)
+		}
 
 		c.pending.Delete(seq)
 	}
@@ -106,10 +92,8 @@ func (c *TCPClient) readLoop() {
 
 func (c *TCPClient) closeAllPending(err error) {
 	c.pending.Range(func(key, value interface{}) bool {
-		call := value.(*Call)
-		call.err = err
-		call.done <- struct{}{}
-		close(call.done)
+		future := value.(*Future)
+		future.Done(nil, err)
 		return true
 	})
 }
