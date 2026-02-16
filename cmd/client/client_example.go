@@ -58,7 +58,6 @@ import (
 
 func main() {
 	reg, _ := registry.NewRegistry([]string{"localhost:2379"})
-
 	c, _ := client.NewClient(reg, client.WithClientCodec(codec.JSON))
 
 	type call struct {
@@ -86,14 +85,22 @@ func main() {
 		calls = append(calls, call{f, args})
 	}
 
-	// 统一等待
+	// Completion Queue
+	doneCh := make(chan call)
+
 	for _, item := range calls {
+		go func(it call) {
+			<-it.future.DoneChan()
+			doneCh <- it
+		}(item)
+	}
+
+	for i := 0; i < len(calls); i++ {
+		item := <-doneCh
+
 		reply := &api.Reply{}
 
-		err := item.future.GetResultWithContext(
-			context.Background(),
-			reply,
-		)
+		err := item.future.GetResult(reply)
 		if err != nil {
 			log.Println("get error:", err)
 			continue

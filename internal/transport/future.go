@@ -48,6 +48,10 @@ func (f *Future) WaitWithContext(ctx context.Context) ([]byte, error) {
 	}
 }
 
+func (f *Future) DoneChan() <-chan struct{} {
+	return f.done
+}
+
 func (f *Future) GetResult(reply interface{}) error {
 	<-f.done
 	f.mu.Lock()
