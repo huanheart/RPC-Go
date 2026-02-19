@@ -9,106 +9,86 @@ import (
 	"kamaRPC/internal/transport"
 	"kamaRPC/pkg/api"
 	"log"
+	"time"
 )
-
-// func main() {
-// 	reg, err := registry.NewRegistry([]string{"localhost:2379"})
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// 	client, err := client.NewClient(reg, client.WithClientCodec(codec.JSON))
-// 	if err != nil {
-// 		log.Println("client.NewClient:", err.Error())
-// 		return
-// 	}
-// 	var wg sync.WaitGroup
-// 	for i := 0; i < 10; i++ {
-// 		wg.Add(1)
-// 		go func(i int) {
-
-// 			defer wg.Done()
-// 			args := &api.Args{A: i, B: i}
-// 			reply := &api.Reply{}
-
-// 			err := client.Invoke(context.Background(), "Arith", "Add", args, reply)
-// 			if err != nil {
-// 				fmt.Println("error:", err)
-// 				return
-// 			}
-// 			if args.A+args.B != reply.Result {
-// 				log.Println("add 出现非法错误", args.A, " ", reply.Result)
-// 			}
-// 			fmt.Printf("Add %v+%v result: %v\n", args.A, args.B, reply.Result)
-// 			args1 := &api.Args1{A: i, B: i, C: i}
-// 			err = client.Invoke(context.Background(), "Arith2", "Mul", args1, reply)
-// 			if err != nil {
-// 				fmt.Println("error:", err)
-// 				return
-// 			}
-// 			// if args.A*args.B != reply.Result {
-// 			// 	log.Println("mul 出现非法错误", args.A, " ", reply.Result)
-// 			// }
-// 			fmt.Printf("mul %v*%v result: %v\n", args.A, args.B, reply.Result)
-// 		}(i)
-// 	}
-
-// 	wg.Wait()
-
-// }
 
 func main() {
 	reg, _ := registry.NewRegistry([]string{"localhost:2379"})
-	c, _ := client.NewClient(reg, client.WithClientCodec(codec.JSON))
+
+	c, err := client.NewClient(
+		reg,
+		client.WithClientCodec(codec.JSON),
+	)
+	if err != nil {
+		log.Println("NewClient error:", err)
+		return
+	}
 
 	type call struct {
 		future *transport.Future
 		args   *api.Args
 	}
 
-	var calls []call
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-	// 批量发送（不等待）
-	for i := 0; i < 10; i++ {
-		args := &api.Args{A: i, B: i}
+	fmt.Println("开始周期性发送请求...")
 
-		f, err := c.InvokeAsync(
-			context.Background(),
-			"Arith",
-			"Add",
-			args,
-		)
-		if err != nil {
-			log.Println("send error:", err)
-			continue
+	counter := 0
+
+	for {
+		<-ticker.C
+
+		fmt.Println("====== 新一轮请求 ======")
+
+		var calls []call
+
+		// 每轮发送 3 个请求
+		for i := 0; i < 3; i++ {
+			args := &api.Args{
+				A: counter,
+				B: counter,
+			}
+			counter++
+
+			f, err := c.InvokeAsync(
+				context.Background(),
+				"Arith",
+				"Add",
+				args,
+			)
+			if err != nil {
+				log.Println("send error:", err)
+				continue
+			}
+
+			calls = append(calls, call{f, args})
 		}
 
-		calls = append(calls, call{f, args})
-	}
-
-	// Completion Queue
-	doneCh := make(chan call)
-
-	for _, item := range calls {
-		go func(it call) {
-			<-it.future.DoneChan()
-			doneCh <- it
-		}(item)
-	}
-
-	for i := 0; i < len(calls); i++ {
-		item := <-doneCh
-
-		reply := &api.Reply{}
-
-		err := item.future.GetResult(reply)
-		if err != nil {
-			log.Println("get error:", err)
-			continue
+		// 等待这一轮的 5 个完成
+		doneCh := make(chan call)
+		log.Println("需要等待", len(calls), "个任务完成")
+		for _, item := range calls {
+			go func(it call) {
+				<-it.future.DoneChan()
+				doneCh <- it
+			}(item)
 		}
 
-		fmt.Printf("Add %v+%v result: %v\n",
-			item.args.A,
-			item.args.B,
-			reply.Result)
+		for i := 0; i < len(calls); i++ {
+			item := <-doneCh
+
+			reply := &api.Reply{}
+			err := item.future.GetResult(reply)
+			if err != nil {
+				log.Println("get error:", err)
+				continue
+			}
+
+			fmt.Printf("Add %v+%v result: %v\n",
+				item.args.A,
+				item.args.B,
+				reply.Result)
+		}
 	}
 }

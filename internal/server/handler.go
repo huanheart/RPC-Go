@@ -10,7 +10,6 @@ import (
 	"reflect"
 )
 
-// Handler 处理请求
 type Handler struct {
 	codec codec.Codec
 }

@@ -3,12 +3,14 @@ package client
 import (
 	"context"
 	"errors"
+	"kamaRPC/internal/breaker"
 	"kamaRPC/internal/codec"
 	"kamaRPC/internal/limiter"
 	"kamaRPC/internal/loadbalance"
 	"kamaRPC/internal/protocol"
 	"kamaRPC/internal/registry"
 	"kamaRPC/internal/transport"
+	"log"
 	"sync"
 	"time"
 )
@@ -19,6 +21,7 @@ type Client struct {
 	limiter *limiter.TokenBucket
 	timeout time.Duration
 	codec   codec.Codec
+	breaker sync.Map // map[string]*CircuitBreaker
 
 	pools sync.Map // map[string]*transport.ConnectionPool
 }
@@ -48,6 +51,11 @@ func (c *Client) InvokeAsync(ctx context.Context, service string, method string,
 	if err != nil {
 		return nil, err
 	}
+	br := c.getBreaker(service, addr)
+
+	if !br.Allow() {
+		return nil, errors.New("circuit breaker open")
+	}
 
 	pool := c.getPool(addr)
 
@@ -72,8 +80,21 @@ func (c *Client) InvokeAsync(ctx context.Context, service string, method string,
 		},
 		Body: body,
 	}
+	future, err := conn.SendAsync(req)
+	if err != nil {
+		br.RecordFailure()
+		return nil, err
+	}
 
-	return conn.SendAsync(req)
+	future.OnComplete(func(err error) {
+		if err != nil {
+			br.RecordFailure()
+		} else {
+			br.RecordSuccess()
+		}
+	})
+
+	return future, nil
 }
 
 // 同步接口 = 异步 + 等待
@@ -112,6 +133,7 @@ func (c *Client) getAddr(service string) (string, error) {
 	}
 
 	instance := c.lb.Select(instances)
+	log.Println("选择的地址为:", instance.Addr)
 	return instance.Addr, nil
 }
 
@@ -121,4 +143,23 @@ func (c *Client) Close() {
 		pool.Close()
 		return true
 	})
+}
+
+func (c *Client) getBreaker(service, addr string) *breaker.CircuitBreaker {
+
+	key := service + "|" + addr
+
+	if val, ok := c.breaker.Load(key); ok {
+		return val.(*breaker.CircuitBreaker)
+	}
+
+	newBreaker := breaker.NewCircuitBreaker(
+		10,
+		0.6,           // 60% 错误率熔断
+		5*time.Second, // 熔断 5 秒
+	)
+
+	actual, _ := c.breaker.LoadOrStore(key, newBreaker)
+
+	return actual.(*breaker.CircuitBreaker)
 }

@@ -16,6 +16,9 @@ type Server struct {
 	listener net.Listener
 	handler  *Handler
 	codec    codec.Codec
+
+	conns   map[*transport.TCPConnection]struct{}
+	closing chan struct{}
 }
 
 // 这边用了另外一种go规范去创建对象
@@ -33,6 +36,8 @@ func NewServer(addr string, opts ...ServerOption) (*Server, error) {
 		services: make(map[string]interface{}),
 		limiter:  limiter.NewTokenBucket(10000),
 		handler:  mustNewHandler(),
+		conns:    make(map[*transport.TCPConnection]struct{}),
+		closing:  make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -88,16 +93,42 @@ func (s *Server) Start() error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			continue
+			select {
+			case <-s.closing:
+				return nil
+			default:
+				continue
+			}
 		}
 
 		tcpConn := transport.NewTCPConnection(conn)
-		go s.Handle(tcpConn)
+
+		s.conns[tcpConn] = struct{}{}
+
+		go func() {
+			s.Handle(tcpConn)
+			delete(s.conns, tcpConn)
+		}()
 	}
+
 }
 
 func (s *Server) Close() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
+}
+
+func (s *Server) Shutdown() {
+	close(s.closing)
+
+	if s.listener != nil {
+		s.listener.Close()
+	}
+
+	for conn := range s.conns {
+		conn.Close()
+	}
+
+	log.Println("server shutdown complete")
 }

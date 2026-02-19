@@ -10,10 +10,7 @@ import (
 
 const BufferSize = 4096
 
-// ==============================
 // 包缓冲区（处理粘包）
-// ==============================
-
 type PacketBuffer struct {
 	buf  []byte
 	lock sync.Mutex
@@ -50,10 +47,6 @@ func (pb *PacketBuffer) Read() []byte {
 	return packet
 }
 
-// ==============================
-// TCPConnection
-// ==============================
-
 type TCPConnection struct {
 	conn   net.Conn
 	reader *bufio.Reader
@@ -73,20 +66,13 @@ func NewTCPConnection(conn net.Conn) *TCPConnection {
 	}
 }
 
-// ==============================
-// 读取（仅允许一个 goroutine 调用）
-// 由 TCPClient.readLoop 单协程使用
-// ==============================
-
 func (tc *TCPConnection) Read() (*protocol.Message, error) {
 	for {
-		// 先尝试从缓冲区取完整包
+		// 尝试从缓冲区取完整包
 		if packet := tc.buffer.Read(); packet != nil {
 			return protocol.Decode(packet)
 		}
 
-		// 读取数据
-		//用一个缓冲区,而不是直接写到tc.buffer,主要是可以一边让tc.buffer在read,一边tc.buffer又可以write
 		tmp := make([]byte, BufferSize)
 		n, err := tc.reader.Read(tmp)
 		if err != nil {
@@ -101,10 +87,6 @@ func (tc *TCPConnection) Read() (*protocol.Message, error) {
 		}
 	}
 }
-
-// ==============================
-// 写入（支持并发写）
-// ==============================
 
 func (tc *TCPConnection) Write(msg *protocol.Message) error {
 	data, err := protocol.Encode(msg)
@@ -127,11 +109,11 @@ func (tc *TCPConnection) Write(msg *protocol.Message) error {
 	return nil
 }
 
-// ==============================
 // 关闭连接
-// ==============================
-
 func (tc *TCPConnection) Close() error {
+	if tcp, ok := tc.conn.(*net.TCPConn); ok {
+		tcp.SetLinger(0)
+	}
 	return tc.conn.Close()
 }
 

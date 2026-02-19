@@ -6,6 +6,8 @@ import (
 	"kamaRPC/internal/server"
 	"kamaRPC/pkg/api"
 	"log"
+	"os"
+	"os/signal"
 )
 
 func main() {
@@ -32,4 +34,13 @@ func main() {
 
 	log.Println("server started at :9091")
 	srv.Start()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+
+	go func() {
+		<-sigCh
+		log.Println("graceful shutdown...")
+		srv.Shutdown()
+	}()
 }

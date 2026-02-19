@@ -6,6 +6,8 @@ import (
 	"kamaRPC/internal/server"
 	"kamaRPC/pkg/api"
 	"log"
+	"os"
+	"os/signal"
 )
 
 func main() {
@@ -20,8 +22,8 @@ func main() {
 		return
 	}
 	// 注册 Arith 服务
-	srv.Register("Arith", &api.Arith{K: 1})
-	srv.Register("Arith2", &api.Arith2{K: 2})
+	srv.Register("Arith", &api.Arith{})
+	srv.Register("Arith2", &api.Arith2{})
 	// 注册服务到 etcd
 	err = reg.Register("Arith", registry.Instance{
 		Addr: "localhost:9090",
@@ -38,4 +40,14 @@ func main() {
 
 	log.Println("server started at :9090")
 	srv.Start()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+
+	go func() {
+		<-sigCh
+		log.Println("graceful shutdown...")
+		srv.Shutdown()
+	}()
+
 }

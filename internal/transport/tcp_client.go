@@ -57,6 +57,7 @@ func (c *TCPClient) SendAsync(msg *protocol.Message) (*Future, error) {
 
 	if err != nil {
 		c.pending.Delete(seq)
+		c.fail(err) // 关键：write 失败也要彻底杀死连接(解决之前连接bug)
 		return nil, err
 	}
 
@@ -67,13 +68,13 @@ func (c *TCPClient) readLoop() {
 	for {
 		msg, err := c.conn.Read()
 		if err != nil {
-			c.closeAllPending(err)
+			c.fail(err)
 			return
 		}
 
 		seq := msg.Header.RequestID
 
-		val, ok := c.pending.Load(seq)
+		val, ok := c.pending.LoadAndDelete(seq)
 		if !ok {
 			continue
 		}
@@ -85,15 +86,23 @@ func (c *TCPClient) readLoop() {
 		} else {
 			future.Done(msg.Body, nil)
 		}
-
-		c.pending.Delete(seq)
 	}
 }
 
-func (c *TCPClient) closeAllPending(err error) {
+func (c *TCPClient) fail(err error) {
+	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
+		return
+	}
+
+	// 关闭底层连接
+	// log.Println("底层连接被关闭")
+	_ = c.conn.Close()
+
+	// 失败所有 pending
 	c.pending.Range(func(key, value interface{}) bool {
 		future := value.(*Future)
 		future.Done(nil, err)
+		c.pending.Delete(key)
 		return true
 	})
 }

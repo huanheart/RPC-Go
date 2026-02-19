@@ -13,6 +13,8 @@ type Future struct {
 	err   error
 	mu    sync.Mutex
 	codec codec.Codec
+
+	onComplete func(error)
 }
 
 func NewFuture() *Future {
@@ -29,6 +31,10 @@ func (f *Future) Done(res []byte, err error) {
 	f.err = err
 	f.mu.Unlock()
 
+	if f.onComplete != nil {
+		f.onComplete(err)
+	}
+
 	close(f.done)
 }
 
@@ -37,6 +43,10 @@ func (f *Future) Wait() ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.res, f.err
+}
+
+func (f *Future) OnComplete(fn func(error)) {
+	f.onComplete = fn
 }
 
 func (f *Future) WaitWithContext(ctx context.Context) ([]byte, error) {

@@ -45,19 +45,14 @@ func Encode(msg *Message) ([]byte, error) {
 	total := 2 + 4 + 4 + headerLen + bodyLen
 	buf := make([]byte, total)
 
-	// 写 Magic
 	binary.BigEndian.PutUint16(buf[0:2], Magic)
 
-	// 写 headerLen
 	binary.BigEndian.PutUint32(buf[2:6], headerLen)
 
-	// 写 bodyLen
 	binary.BigEndian.PutUint32(buf[6:10], bodyLen)
 
-	// 写 header
 	copy(buf[10:], headerBytes)
 
-	// 写 body
 	copy(buf[10+headerLen:], bodyBytes)
 
 	return buf, nil
@@ -80,7 +75,7 @@ func Decode(data []byte) (*Message, error) {
 		return nil, fmt.Errorf("data too short")
 	}
 
-	// 1️⃣ 检查 Magic
+	// 检查 Magic
 	if binary.BigEndian.Uint16(data[0:2]) != Magic {
 		return nil, fmt.Errorf("invalid magic number")
 	}
@@ -93,7 +88,6 @@ func Decode(data []byte) (*Message, error) {
 		return nil, fmt.Errorf("incomplete packet")
 	}
 
-	// 2️⃣ 读取 header
 	headerBytes := data[10 : 10+headerLen]
 
 	headerCodec, err := codec.New(codec.JSON)
@@ -106,10 +100,9 @@ func Decode(data []byte) (*Message, error) {
 		return nil, err
 	}
 
-	// 3️⃣ 读取 body（必须精确切片）
+	// 读取 body
 	bodyBytes := data[10+headerLen : 10+headerLen+bodyLen]
 
-	// 4️⃣ 如果压缩，解压
 	if header.Compression != codec.CompressionNone {
 		bodyBytes, err = codec.Decompress(bodyBytes, header.Compression)
 		if err != nil {
